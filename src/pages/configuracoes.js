@@ -38,7 +38,7 @@ export default function ConfiguracoesPage() {
   const [teamRules, setTeamRules] = useState([])
   const [importLog, setImportLog] = useState(null)
   const [importing, setImporting] = useState(false)
-  const [progress, setProgress] = useState(null) // { current, total, pct }
+  const [progress, setProgress] = useState(null)
   const [importHistory, setImportHistory] = useState([])
   const [newRule, setNewRule] = useState({ team_name: '', rule_type: 'lawyer', rule_value: '' })
   const [users, setUsers] = useState([])
@@ -70,12 +70,11 @@ export default function ConfiguracoesPage() {
 
     try {
       const buffer = await file.arrayBuffer()
-      let raw = []
 
-      // XLSX suporta .csv e .xlsx, inclusive com encoding latin e separador ponto-e-vírgula
+      // XLSX lê tanto .xlsx quanto .csv com qualquer encoding e separador
       const wb = XLSX.read(buffer, { type: 'array', cellDates: false })
       const ws = wb.Sheets[wb.SheetNames[0]]
-      raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })}
+      const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
 
       if (raw.length < 2) {
         setImportLog({ error: 'Arquivo vazio ou sem dados.' })
@@ -83,13 +82,12 @@ export default function ConfiguracoesPage() {
         return
       }
 
-      // Detecta linha de cabeçalho real
       const headerIdx = findHeaderRow(raw)
       const headers = raw[headerIdx].map(h => h?.toString().trim())
       const columnMapping = detectColumns(headers)
 
       if (!columnMapping.processid) {
-        setImportLog({ error: `Coluna "Id do Processo" não encontrada. Colunas detectadas: ${headers.filter(Boolean).slice(0,8).join(', ')}` })
+        setImportLog({ error: `Coluna "Id do Processo" não encontrada. Colunas detectadas: ${headers.filter(Boolean).slice(0, 8).join(', ')}` })
         setImporting(false)
         return
       }
@@ -97,12 +95,8 @@ export default function ConfiguracoesPage() {
       const { data: rules } = await supabase.from('team_rules').select('*').eq('active', true)
       const rows = raw.slice(headerIdx + 1).filter(r => r.some(c => c !== ''))
       const total = rows.length
-
-      let newRecords = 0
-      let updatedRecords = 0
-
-      // Modo rápido: processa em lotes de 100 com upsert
       const BATCH = 100
+
       for (let i = 0; i < rows.length; i += BATCH) {
         const batch = rows.slice(i, i + BATCH)
         const records = []
@@ -141,17 +135,11 @@ export default function ConfiguracoesPage() {
         }
 
         if (records.length > 0) {
-          // Upsert em lote — muito mais rápido que um por um
-          const { error } = await supabase
+          await supabase
             .from('processos')
             .upsert(records, { onConflict: 'processid', ignoreDuplicates: false })
-
-          if (!error) {
-            newRecords += records.length // aproximado (upsert não distingue)
-          }
         }
 
-        // Atualiza progresso — await deixa o browser renderizar antes do próximo lote
         const current = Math.min(i + BATCH, total)
         setProgress({ current, total, pct: Math.round((current / total) * 100) })
         await new Promise(resolve => setTimeout(resolve, 0))
@@ -160,8 +148,8 @@ export default function ConfiguracoesPage() {
       await supabase.from('import_history').insert({
         filename: file.name,
         total_rows: total,
-        new_records: newRecords,
-        updated_records: updatedRecords,
+        new_records: 0,
+        updated_records: 0,
         imported_by: user.email
       })
 
@@ -182,8 +170,14 @@ export default function ConfiguracoesPage() {
     setNewRule({ team_name: '', rule_type: 'lawyer', rule_value: '' })
     fetchTeamRules()
   }
-  const toggleRule = async (id, active) => { await supabase.from('team_rules').update({ active: !active }).eq('id', id); fetchTeamRules() }
-  const deleteRule = async (id) => { await supabase.from('team_rules').delete().eq('id', id); fetchTeamRules() }
+  const toggleRule = async (id, active) => {
+    await supabase.from('team_rules').update({ active: !active }).eq('id', id)
+    fetchTeamRules()
+  }
+  const deleteRule = async (id) => {
+    await supabase.from('team_rules').delete().eq('id', id)
+    fetchTeamRules()
+  }
 
   const addUser = async () => {
     if (!newUser.email || !newUser.password) return
@@ -196,7 +190,8 @@ export default function ConfiguracoesPage() {
   }
   const deleteUser = async (id) => {
     if (id === user.id) { setMsg('Não é possível excluir o usuário logado.'); return }
-    await supabase.from('users').delete().eq('id', id); fetchUsers()
+    await supabase.from('users').delete().eq('id', id)
+    fetchUsers()
   }
 
   const inputStyle = { background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', padding: '9px 14px', fontSize: '14px', outline: 'none', flex: 1 }
@@ -208,7 +203,6 @@ export default function ConfiguracoesPage() {
   return (
     <Layout activeTab="config">
 
-      {/* IMPORTAÇÃO */}
       <Section title="📥 Importar Planilha">
         <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
           <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleFileChange} disabled={importing} style={{ display: 'none' }} id="fileInput" />
@@ -217,37 +211,29 @@ export default function ConfiguracoesPage() {
           </label>
         </div>
 
-        {/* Barra de progresso */}
         {progress && (
           <div style={{ marginTop: '20px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
               <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px' }}>
-                Processando linha {progress.current.toLocaleString('pt-BR')} de {progress.total.toLocaleString('pt-BR')}
+                Processando {progress.current.toLocaleString('pt-BR')} de {progress.total.toLocaleString('pt-BR')} registros
               </span>
               <span style={{ color: '#60a5fa', fontSize: '13px', fontWeight: '600' }}>{progress.pct}%</span>
             </div>
             <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: '8px', height: '10px', overflow: 'hidden' }}>
-              <div style={{
-                height: '100%', borderRadius: '8px',
-                background: 'linear-gradient(90deg, #3b82f6, #10b981)',
-                width: `${progress.pct}%`,
-                transition: 'width 0.3s ease'
-              }} />
+              <div style={{ height: '100%', borderRadius: '8px', background: 'linear-gradient(90deg, #3b82f6, #10b981)', width: `${progress.pct}%`, transition: 'width 0.3s ease' }} />
             </div>
           </div>
         )}
 
-        {/* Resultado */}
         {importLog && (
           <div style={{ marginTop: '16px', padding: '16px', background: importLog.error ? 'rgba(239,68,68,0.1)' : 'rgba(16,185,129,0.1)', border: `1px solid ${importLog.error ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)'}`, borderRadius: '8px' }}>
             {importLog.error
               ? <p style={{ color: '#fca5a5', margin: 0 }}>❌ {importLog.error}</p>
-              : <p style={{ color: '#6ee7b7', margin: 0, fontWeight: '600' }}>✅ Importação concluída — {importLog.filename} — {importLog.total.toLocaleString('pt-BR')} registros processados</p>
+              : <p style={{ color: '#6ee7b7', margin: 0, fontWeight: '600' }}>✅ Concluído — {importLog.filename} — {importLog.total.toLocaleString('pt-BR')} registros processados</p>
             }
           </div>
         )}
 
-        {/* Histórico */}
         {importHistory.length > 0 && (
           <div style={{ marginTop: '20px' }}>
             <p style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px', marginBottom: '10px' }}>Últimas importações:</p>
@@ -274,8 +260,7 @@ export default function ConfiguracoesPage() {
         )}
       </Section>
 
-      {/* REGRAS DE EQUIPE */}
-      <Section title="👥 Regras de Equipes" subtitle="Advogados têm prioridade sobre a área. Área 'Administrativo' = Passivas. Áreas 'Trabalhista' e 'Tributário' são ignoradas.">
+      <Section title="👥 Regras de Equipes" subtitle="Advogados têm prioridade sobre a área. Ex: Administrativo = Passivas. Trabalhista e Tributário são ignorados.">
         <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
           <input placeholder="Nome da equipe (ex: Ativas)" value={newRule.team_name} onChange={e => setNewRule(r => ({ ...r, team_name: e.target.value }))} style={inputStyle} />
           <select value={newRule.rule_type} onChange={e => setNewRule(r => ({ ...r, rule_type: e.target.value }))} style={{ ...inputStyle, flex: 'none', width: '160px' }}>
@@ -320,7 +305,6 @@ export default function ConfiguracoesPage() {
         </table>
       </Section>
 
-      {/* USUÁRIOS */}
       <Section title="🔐 Usuários do Sistema">
         <div style={{ display: 'flex', gap: '10px', marginBottom: '20px', flexWrap: 'wrap' }}>
           <input placeholder="Nome" value={newUser.name} onChange={e => setNewUser(u => ({ ...u, name: e.target.value }))} style={inputStyle} />
@@ -353,6 +337,7 @@ export default function ConfiguracoesPage() {
           </tbody>
         </table>
       </Section>
+
     </Layout>
   )
 }
