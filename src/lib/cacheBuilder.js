@@ -96,8 +96,13 @@ export async function buildAndSaveCache(onProgress) {
     const valorTotal = rows.reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
 
     // Tempos
-    // Ajuiz→Cad: usa apenas processos cadastrados no período para não distorcer com processos antigos encerrados
-    const tempoAjuizCad = calcMedia(cadastrosNoPeriodo.filter(p => p.distributiondate && p.createdate), p => Math.abs(daysDiff(p.distributiondate, p.createdate)))
+    // Ajuiz→Cad: createdate deve ser APÓS distributiondate, e no máximo 5 anos de diferença
+    const ajuizCadRows = cadastrosNoPeriodo.filter(p => {
+      if (!p.distributiondate || !p.createdate) return false
+      const diff = daysDiff(p.distributiondate, p.createdate) // positivo = cad após ajuiz (correto)
+      return diff >= 0 && diff <= 1825 // só valores válidos, até 5 anos
+    })
+    const tempoAjuizCad = calcMedia(ajuizCadRows, p => daysDiff(p.distributiondate, p.createdate))
     const tempoCadEnc = calcMedia(encerradosNoPeriodo.filter(p => p.createdate && p.closedate), p => Math.abs(daysDiff(p.createdate, p.closedate)))
     const tempoAjuizEnc = calcMedia(encerradosNoPeriodo.filter(p => p.distributiondate && p.closedate), p => Math.abs(daysDiff(p.distributiondate, p.closedate)))
 
