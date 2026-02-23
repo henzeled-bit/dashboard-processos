@@ -5,7 +5,7 @@ import Layout from '../components/Layout'
 import { supabase } from '../lib/supabase'
 import {
   BarChart, Bar, LineChart, Line, ComposedChart,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell, PieChart, Pie
 } from 'recharts'
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899']
@@ -52,11 +52,19 @@ const CustomTooltip = ({ active, payload, label }) => {
   )
 }
 
-// Limpa valores null/string "null"
-function clean(v) {
-  if (v === null || v === undefined) return null
-  if (typeof v === 'string' && v.trim().toLowerCase() === 'null') return null
-  return v
+// Conta registros com filtros via Supabase
+async function countQuery(filters) {
+  let q = supabase.from('processos').select('*', { count: 'exact', head: true })
+  if (filters.team) q = q.eq('team', filters.team)
+  if (filters.createdate_gte) q = q.gte('createdate', filters.createdate_gte)
+  if (filters.createdate_lte) q = q.lte('createdate', filters.createdate_lte)
+  if (filters.closedate_gte) q = q.gte('closedate', filters.closedate_gte)
+  if (filters.closedate_lte) q = q.lte('closedate', filters.closedate_lte)
+  if (filters.closedate_null) q = q.is('closedate', null)
+  if (filters.closedate_not_null) q = q.not('closedate', 'is', null)
+  if (filters.closedatepartial_not_null) q = q.not('closedatepartial', 'is', null)
+  const { count } = await q
+  return count || 0
 }
 
 export default function DashboardPage() {
@@ -70,167 +78,200 @@ export default function DashboardPage() {
   const [equipes, setEquipes] = useState([])
 
   useEffect(() => { if (!loading && !user) router.push('/') }, [user, loading])
-  useEffect(() => { if (user) fetchAll() }, [user])
-  useEffect(() => { if (user && !fetching) fetchStats() }, [filtroEquipe, filtroAno])
-
-  const fetchAll = async () => {
-    setFetching(true)
-    await Promise.all([fetchMeta(), fetchStats()])
-    setFetching(false)
-  }
+  useEffect(() => { if (user) fetchMeta().then(() => fetchStats()) }, [user])
+  useEffect(() => { if (user && anos.length > 0) fetchStats() }, [filtroEquipe, filtroAno])
 
   const fetchMeta = async () => {
-    // Anos e equipes distintos via amostra
-    const [{ data: d1 }, { data: d2 }, { data: d3 }] = await Promise.all([
-      supabase.from('processos').select('createdate').not('createdate', 'is', null).limit(2000),
-      supabase.from('processos').select('closedate').not('closedate', 'is', null).limit(2000),
-      supabase.from('processos').select('team').not('team', 'is', null).limit(2000),
-    ])
-    const anosSet = new Set()
-    ;(d1 || []).forEach(r => r.createdate && anosSet.add(r.createdate.substring(0, 4)))
-    ;(d2 || []).forEach(r => r.closedate && anosSet.add(r.closedate.substring(0, 4)))
-    setAnos([...anosSet].sort().reverse())
-    setEquipes([...new Set((d3 || []).map(r => r.team).filter(Boolean))].sort())
+    // Equipes distintas
+    const { data: eqData } = await supabase.from('processos').select('team').not('team', 'is', null).limit(10000)
+    setEquipes([...new Set((eqData || []).map(r => r.team).filter(Boolean))].sort())
+
+    // Anos distintos via SQL
+    const { data: anosData } = await supabase.rpc('get_anos_distintos').catch(() => ({ data: null }))
+    if (anosData) {
+      setAnos(anosData.map(r => r.ano).filter(Boolean).sort().reverse())
+    } else {
+      // fallback
+      const { data: d1 } = await supabase.from('processos').select('createdate').not('createdate', 'is', null).limit(5000)
+      const { data: d2 } = await supabase.from('processos').select('closedate').not('closedate', 'is', null).limit(5000)
+      const s = new Set()
+      ;(d1||[]).forEach(r => r.createdate && s.add(r.createdate.substring(0,4)))
+      ;(d2||[]).forEach(r => r.closedate && s.add(r.closedate.substring(0,4)))
+      setAnos([...s].sort().reverse())
+    }
   }
 
   const fetchStats = async () => {
     setFetching(true)
     try {
+      const eq = filtroEquipe !== 'Todas' ? filtroEquipe : null
       const anoFilter = filtroAno !== 'Todos'
-      const eqFilter = filtroEquipe !== 'Todas'
+      const anoIni = anoFilter ? `${filtroAno}-01-01` : null
+      const anoFim = anoFilter ? `${filtroAno}-12-31` : null
 
-      // Total geral na base
-      let qTotal = supabase.from('processos').select('*', { count: 'exact', head: true })
-      if (eqFilter) qTotal = qTotal.eq('team', filtroEquipe)
-      const { count: totalBase } = await qTotal
+      // ---- CONTAGENS PRINCIPAIS via queries paralelas ----
+      const teamFilter = eq ? { team: eq } : {}
 
-      // Busca amostra filtrada (até 5000 registros)
-      let q = supabase.from('processos')
-        .select('createdate,closedate,closedatepartial,distributiondate,team,namestate,closereason,totalvalue')
-        .limit(5000)
-        .order('createdate', { ascending: false })
-      if (eqFilter) q = q.eq('team', filtroEquipe)
-      if (anoFilter) q = q.or(`createdate.gte.${filtroAno}-01-01,closedate.gte.${filtroAno}-01-01`)
+      const [ativos, cadastros, encerrados, dentroPrazo, comPrazo] = await Promise.all([
+        // Ativos = sem closedate (sem filtro de ano, pois ativos não têm closedate)
+        countQuery({ ...teamFilter, closedate_null: true }),
+        // Cadastros no ano
+        countQuery({ ...teamFilter, ...(anoIni ? { createdate_gte: anoIni, createdate_lte: anoFim } : {}) }),
+        // Encerrados no ano
+        countQuery({ ...teamFilter, ...(anoIni ? { closedate_gte: anoIni, closedate_lte: anoFim } : { closedate_not_null: true }) }),
+        // Dentro do prazo (30 dias) — buscamos amostra para calcular
+        0, 0
+      ])
 
-      const { data: sample } = await q
-      const rows = (sample || []).filter(p => {
-        if (!anoFilter) return true
-        return p.createdate?.startsWith(filtroAno) || p.closedate?.startsWith(filtroAno)
-      })
+      // Valor total — soma via amostra grande
+      let qValor = supabase.from('processos').select('totalvalue').limit(50000)
+      if (eq) qValor = qValor.eq('team', eq)
+      if (anoIni) qValor = qValor.or(`createdate.gte.${anoIni},closedate.gte.${anoIni}`)
+      const { data: valorData } = await qValor
+      const valorTotal = (valorData || []).reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
 
-      // Cadastros e encerramentos no período
-      const cadastrosNoPeriodo = rows.filter(p => !anoFilter || p.createdate?.startsWith(filtroAno))
-      const encerradosNoPeriodo = rows.filter(p => p.closedate && (!anoFilter || p.closedate.startsWith(filtroAno)))
-      const ativos = rows.filter(p => !p.closedate)
+      // Prazo 30 dias — amostra dos encerrados com closedatepartial
+      let qPrazo = supabase.from('processos')
+        .select('closedate,closedatepartial')
+        .not('closedate', 'is', null)
+        .not('closedatepartial', 'is', null)
+        .limit(10000)
+      if (eq) qPrazo = qPrazo.eq('team', eq)
+      if (anoIni) qPrazo = qPrazo.gte('closedate', anoIni).lte('closedate', anoFim)
+      const { data: prazoData } = await qPrazo
+      const prazoRows = prazoData || []
+      const dentro = prazoRows.filter(p => Math.round((new Date(p.closedate) - new Date(p.closedatepartial)) / 86400000) <= 30)
+      const pctDentro = prazoRows.length > 0 ? Math.round(dentro.length / prazoRows.length * 100) : 0
 
-      // Prazo 30 dias
-      const comPrazo = encerradosNoPeriodo.filter(p => p.closedatepartial && p.closedate)
-      const dentroPrazo = comPrazo.filter(p => Math.round((new Date(p.closedate) - new Date(p.closedatepartial)) / 86400000) <= 30)
-      const pctDentro = comPrazo.length > 0 ? Math.round(dentroPrazo.length / comPrazo.length * 100) : 0
+      // Tempos médios — amostra
+      let qTempos = supabase.from('processos')
+        .select('createdate,closedate,distributiondate')
+        .limit(10000)
+      if (eq) qTempos = qTempos.eq('team', eq)
+      if (anoIni) qTempos = qTempos.or(`createdate.gte.${anoIni},closedate.gte.${anoIni}`)
+      const { data: temposData } = await qTempos
+      const tempos = temposData || []
 
-      // Valor total
-      const valorTotal = rows.reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
+      const calcMedia = (arr, fn) => arr.length > 0 ? Math.round(arr.reduce((s, p) => s + fn(p), 0) / arr.length) : null
 
-      // Tempo médio Ajuiz→Cadastro (invertido: quando recebemos após ajuizamento)
-      const ajuizCad = rows.filter(p => p.distributiondate && p.createdate)
-      const tempoAjuizCad = ajuizCad.length > 0
-        ? Math.round(ajuizCad.reduce((s, p) => s + Math.abs(Math.round((new Date(p.createdate) - new Date(p.distributiondate)) / 86400000)), 0) / ajuizCad.length)
-        : null
+      const ajuizCad = tempos.filter(p => p.distributiondate && p.createdate)
+      const tempoAjuizCad = calcMedia(ajuizCad, p => Math.abs(Math.round((new Date(p.createdate) - new Date(p.distributiondate)) / 86400000)))
 
-      // Tempo médio Cadastro→Encerramento PGJ
-      const cadEnc = encerradosNoPeriodo.filter(p => p.createdate && p.closedate)
-      const tempoCadEnc = cadEnc.length > 0
-        ? Math.round(cadEnc.reduce((s, p) => s + Math.abs(Math.round((new Date(p.closedate) - new Date(p.createdate)) / 86400000)), 0) / cadEnc.length)
-        : null
+      const cadEnc = tempos.filter(p => p.createdate && p.closedate)
+      const tempoCadEnc = calcMedia(cadEnc, p => Math.abs(Math.round((new Date(p.closedate) - new Date(p.createdate)) / 86400000)))
 
-      // Tempo médio Ajuiz→Encerramento
-      const ajuizEnc = encerradosNoPeriodo.filter(p => p.distributiondate && p.closedate)
-      const tempoAjuizEnc = ajuizEnc.length > 0
-        ? Math.round(ajuizEnc.reduce((s, p) => s + Math.abs(Math.round((new Date(p.closedate) - new Date(p.distributiondate)) / 86400000)), 0) / ajuizEnc.length)
-        : null
+      const ajuizEnc = tempos.filter(p => p.distributiondate && p.closedate)
+      const tempoAjuizEnc = calcMedia(ajuizEnc, p => Math.abs(Math.round((new Date(p.closedate) - new Date(p.distributiondate)) / 86400000)))
 
-      // ---- GRÁFICO MENSAL (ano selecionado) ----
+      // ---- GRÁFICO MENSAL ----
+      let qMensal = supabase.from('processos')
+        .select('createdate,closedate')
+        .limit(50000)
+      if (eq) qMensal = qMensal.eq('team', eq)
+      if (anoIni) qMensal = qMensal.or(`createdate.gte.${anoIni},closedate.gte.${anoIni}`)
+      const { data: mensalData } = await qMensal
+      const mensalRows = mensalData || []
+
       const mesesMap = {}
-      rows.forEach(p => {
-        if (p.createdate && (!anoFilter || p.createdate.startsWith(filtroAno))) {
+      mensalRows.forEach(p => {
+        if (p.createdate && (!anoIni || p.createdate >= anoIni && p.createdate <= anoFim)) {
           const m = p.createdate.substring(0, 7)
           mesesMap[m] = mesesMap[m] || { mes: m, Cadastros: 0, Encerramentos: 0 }
           mesesMap[m].Cadastros++
         }
-        if (p.closedate && (!anoFilter || p.closedate.startsWith(filtroAno))) {
+        if (p.closedate && (!anoIni || p.closedate >= anoIni && p.closedate <= anoFim)) {
           const m = p.closedate.substring(0, 7)
           mesesMap[m] = mesesMap[m] || { mes: m, Cadastros: 0, Encerramentos: 0 }
           mesesMap[m].Encerramentos++
         }
       })
-      // Adiciona linha de ativos acumulados por mês
-      let ativoAcum = 0
+      let acum = 0
       const mesesData = Object.values(mesesMap).sort((a, b) => a.mes.localeCompare(b.mes)).map(d => {
-        ativoAcum += d.Cadastros - d.Encerramentos
-        return { ...d, mes: d.mes.replace('-', '/'), Ativos: Math.max(0, ativoAcum) }
+        acum += d.Cadastros - d.Encerramentos
+        return { ...d, mes: d.mes.replace('-', '/'), Ativos: Math.max(0, acum) }
       })
 
-      // ---- EVOLUÇÃO ANUAL DA BASE ----
+      // ---- EVOLUÇÃO ANUAL ----
+      let qAnual = supabase.from('processos').select('createdate,closedate').limit(50000)
+      if (eq) qAnual = qAnual.eq('team', eq)
+      const { data: anualData } = await qAnual
       const anoMap = {}
-      rows.forEach(p => {
-        if (p.createdate) {
-          const a = p.createdate.substring(0, 4)
-          anoMap[a] = anoMap[a] || { ano: a, Cadastros: 0, Encerramentos: 0 }
-          anoMap[a].Cadastros++
-        }
-        if (p.closedate) {
-          const a = p.closedate.substring(0, 4)
-          anoMap[a] = anoMap[a] || { ano: a, Cadastros: 0, Encerramentos: 0 }
-          anoMap[a].Encerramentos++
-        }
+      ;(anualData || []).forEach(p => {
+        if (p.createdate) { const a = p.createdate.substring(0,4); anoMap[a] = anoMap[a]||{ano:a,Cadastros:0,Encerramentos:0}; anoMap[a].Cadastros++ }
+        if (p.closedate) { const a = p.closedate.substring(0,4); anoMap[a] = anoMap[a]||{ano:a,Cadastros:0,Encerramentos:0}; anoMap[a].Encerramentos++ }
       })
       let baseAcum = 0
-      const evolucaoBase = Object.values(anoMap).sort((a, b) => a.ano.localeCompare(b.ano)).map(d => {
+      const evolucaoBase = Object.values(anoMap).sort((a,b) => a.ano.localeCompare(b.ano)).map(d => {
         baseAcum += d.Cadastros - d.Encerramentos
         return { ...d, Base: Math.max(0, baseAcum) }
       })
 
       // ---- POR EQUIPE ----
+      let qEq = supabase.from('processos').select('team,closedate,totalvalue').limit(50000)
+      if (eq) qEq = qEq.eq('team', eq)
+      if (anoIni) qEq = qEq.or(`createdate.gte.${anoIni},closedate.gte.${anoIni}`)
+      const { data: eqData } = await qEq
       const equipesMap = {}
-      rows.forEach(p => {
-        const eq = p.team || 'Sem Equipe'
-        equipesMap[eq] = equipesMap[eq] || { equipe: eq, Ativos: 0, Encerrados: 0, Valor: 0 }
-        if (p.closedate) equipesMap[eq].Encerrados++
-        else equipesMap[eq].Ativos++
-        equipesMap[eq].Valor += parseFloat(p.totalvalue) || 0
+      ;(eqData || []).forEach(p => {
+        const e2 = p.team || 'Sem Equipe'
+        equipesMap[e2] = equipesMap[e2] || { equipe: e2, Ativos: 0, Encerrados: 0, Valor: 0 }
+        if (p.closedate) equipesMap[e2].Encerrados++
+        else equipesMap[e2].Ativos++
+        equipesMap[e2].Valor += parseFloat(p.totalvalue) || 0
       })
       const equipesData = Object.values(equipesMap)
 
       // ---- PRAZO POR EQUIPE ----
-      const prazoMap = {}
-      encerradosNoPeriodo.filter(p => p.closedatepartial).forEach(p => {
-        const eq = p.team || 'Sem Equipe'
-        prazoMap[eq] = prazoMap[eq] || { equipe: eq, 'Dentro do Prazo': 0, 'Fora do Prazo': 0 }
+      const prazoEqMap = {}
+      prazoRows.forEach(p => {
+        // precisamos team — vamos buscar separado abaixo
+      })
+      let qPrazoEq = supabase.from('processos')
+        .select('team,closedate,closedatepartial')
+        .not('closedate', 'is', null)
+        .not('closedatepartial', 'is', null)
+        .limit(10000)
+      if (eq) qPrazoEq = qPrazoEq.eq('team', eq)
+      if (anoIni) qPrazoEq = qPrazoEq.gte('closedate', anoIni).lte('closedate', anoFim)
+      const { data: prazoEqData } = await qPrazoEq
+      ;(prazoEqData || []).forEach(p => {
+        const e2 = p.team || 'Sem Equipe'
+        prazoEqMap[e2] = prazoEqMap[e2] || { equipe: e2, 'Dentro do Prazo': 0, 'Fora do Prazo': 0 }
         const diff = Math.round((new Date(p.closedate) - new Date(p.closedatepartial)) / 86400000)
-        if (diff <= 30) prazoMap[eq]['Dentro do Prazo']++
-        else prazoMap[eq]['Fora do Prazo']++
+        if (diff <= 30) prazoEqMap[e2]['Dentro do Prazo']++
+        else prazoEqMap[e2]['Fora do Prazo']++
       })
-      const prazoEquipeData = Object.values(prazoMap)
+      const prazoEquipeData = Object.values(prazoEqMap)
 
-      // ---- MOTIVOS (sem null) ----
+      // ---- MOTIVOS ----
+      let qMotivos = supabase.from('processos')
+        .select('closereason')
+        .not('closedate', 'is', null)
+        .not('closereason', 'is', null)
+        .limit(10000)
+      if (eq) qMotivos = qMotivos.eq('team', eq)
+      if (anoIni) qMotivos = qMotivos.gte('closedate', anoIni).lte('closedate', anoFim)
+      const { data: motivosRaw } = await qMotivos
       const motivosMap = {}
-      encerradosNoPeriodo.forEach(p => {
-        const motivo = clean(p.closereason)
-        if (motivo) motivosMap[motivo] = (motivosMap[motivo] || 0) + 1
+      ;(motivosRaw || []).forEach(p => {
+        const m = p.closereason
+        if (!m || m.toLowerCase() === 'null' || m.trim() === '') return
+        motivosMap[m] = (motivosMap[m] || 0) + 1
       })
-      const motivosData = Object.entries(motivosMap).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 8)
+      const motivosData = Object.entries(motivosMap).map(([name, value]) => ({ name, value })).sort((a,b) => b.value - a.value).slice(0, 8)
 
       // ---- ESTADOS ----
+      let qEstados = supabase.from('processos').select('namestate').not('namestate', 'is', null).limit(20000)
+      if (eq) qEstados = qEstados.eq('team', eq)
+      if (anoIni) qEstados = qEstados.or(`createdate.gte.${anoIni},closedate.gte.${anoIni}`)
+      const { data: estadosRaw } = await qEstados
       const estadosMap = {}
-      rows.forEach(p => { if (p.namestate) estadosMap[p.namestate] = (estadosMap[p.namestate] || 0) + 1 })
-      const estadosData = Object.entries(estadosMap).map(([estado, total]) => ({ estado, total })).sort((a, b) => b.total - a.total).slice(0, 8)
+      ;(estadosRaw || []).forEach(p => { if (p.namestate) estadosMap[p.namestate] = (estadosMap[p.namestate] || 0) + 1 })
+      const estadosData = Object.entries(estadosMap).map(([estado, total]) => ({ estado, total })).sort((a,b) => b.total - a.total).slice(0, 8)
 
       setStats({
-        totalBase,
-        cadastros: cadastrosNoPeriodo.length,
-        encerrados: encerradosNoPeriodo.length,
-        ativos: ativos.length,
-        pctDentro, dentroPrazo: dentroPrazo.length, comPrazo: comPrazo.length,
+        ativos, cadastros, encerrados,
+        pctDentro, dentroPrazo: dentro.length, comPrazo: prazoRows.length,
         valorTotal, tempoAjuizCad, tempoCadEnc, tempoAjuizEnc,
         mesesData, evolucaoBase, equipesData, prazoEquipeData, motivosData, estadosData
       })
@@ -245,7 +286,6 @@ export default function DashboardPage() {
 
   return (
     <Layout activeTab="dashboard">
-      {/* Filtros */}
       <div style={{ display: 'flex', gap: '12px', marginBottom: '28px', alignItems: 'center', flexWrap: 'wrap' }}>
         <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '13px' }}>Filtrar por:</span>
         <select value={filtroEquipe} onChange={e => setFiltroEquipe(e.target.value)} style={filterStyle}>
@@ -270,7 +310,6 @@ export default function DashboardPage() {
         <div style={{ textAlign: 'center', padding: '80px', color: 'rgba(255,255,255,0.4)' }}>⏳ Calculando métricas...</div>
       ) : stats ? (
         <>
-          {/* Cards — linha 1 */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '16px', marginBottom: '16px' }}>
             <StatCard title="Processos Ativos" value={stats.ativos.toLocaleString('pt-BR')} subtitle="sem data de encerramento" icon="🟢" color="#10b981" />
             <StatCard title={filtroAno !== 'Todos' ? `Cadastros em ${filtroAno}` : 'Cadastros'} value={stats.cadastros.toLocaleString('pt-BR')} subtitle={subtitulo} icon="📥" color="#3b82f6" />
@@ -279,16 +318,14 @@ export default function DashboardPage() {
             <StatCard title="Valor Total" value={`R$ ${((stats.valorTotal || 0) / 1000000).toFixed(1)}M`} subtitle={subtitulo} icon="💰" color="#f59e0b" />
           </div>
 
-          {/* Cards — linha 2 (tempos médios) */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '16px', marginBottom: '28px' }}>
             <StatCard title="Tempo Médio Ajuiz→Cad" value={stats.tempoAjuizCad ? `${stats.tempoAjuizCad}d` : '-'} subtitle="dias entre ajuizamento e entrada na base" icon="📋" color="#06b6d4" />
             <StatCard title="Tempo Médio Cad→Enc" value={stats.tempoCadEnc ? `${stats.tempoCadEnc}d` : '-'} subtitle="dias entre cadastro e encerramento PGJ" icon="📅" color="#ec4899" />
             <StatCard title="Tempo Médio Ajuiz→Enc" value={stats.tempoAjuizEnc ? `${stats.tempoAjuizEnc}d` : '-'} subtitle="dias entre ajuizamento e encerramento" icon="📆" color="#f59e0b" />
           </div>
 
-          {/* Gráfico mensal do ano selecionado */}
           <div style={{ marginBottom: '20px' }}>
-            <ChartCard title={filtroAno !== 'Todos' ? `Movimento Mensal — ${filtroAno}` : 'Movimento Mensal'} subtitle="Cadastros, encerramentos e ativos acumulados no período">
+            <ChartCard title={filtroAno !== 'Todos' ? `Movimento Mensal — ${filtroAno}` : 'Movimento Mensal'} subtitle="Cadastros, encerramentos e ativos acumulados">
               <ResponsiveContainer width="100%" height={300}>
                 <ComposedChart data={stats.mesesData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
@@ -305,9 +342,8 @@ export default function DashboardPage() {
             </ChartCard>
           </div>
 
-          {/* Evolução anual da base */}
           <div style={{ marginBottom: '20px' }}>
-            <ChartCard title="Evolução Anual da Base" subtitle="Cadastros, encerramentos e crescimento acumulado por ano">
+            <ChartCard title="Evolução Anual da Base" subtitle="Cadastros, encerramentos e total acumulado por ano">
               <ResponsiveContainer width="100%" height={280}>
                 <ComposedChart data={stats.evolucaoBase}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
@@ -324,7 +360,6 @@ export default function DashboardPage() {
             </ChartCard>
           </div>
 
-          {/* Linha: Por equipe + Prazo */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
             <ChartCard title="Processos por Equipe" subtitle="Ativos e encerrados">
               <ResponsiveContainer width="100%" height={280}>
@@ -359,7 +394,6 @@ export default function DashboardPage() {
             </ChartCard>
           </div>
 
-          {/* Linha: Motivos + Estados */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
             <ChartCard title="Motivos de Encerramento" subtitle="Top 8 — processos ativos excluídos">
               {stats.motivosData.length > 0 ? (
