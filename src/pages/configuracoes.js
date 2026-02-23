@@ -5,6 +5,7 @@ import Layout from '../components/Layout'
 import { supabase } from '../lib/supabase'
 import { detectColumns, normalizeRow, parseDate, calculateTeam } from '../lib/columnMapper'
 import * as XLSX from 'xlsx'
+import { buildAndSaveCache } from '../lib/cacheBuilder'
 
 function Section({ title, subtitle, children }) {
   return (
@@ -44,6 +45,8 @@ export default function ConfiguracoesPage() {
   const [users, setUsers] = useState([])
   const [newUser, setNewUser] = useState({ name: '', email: '', password: '' })
   const [msg, setMsg] = useState('')
+  const [cacheMsg, setCacheMsg] = useState('')
+  const [buildingCache, setBuildingCache] = useState(false)
 
   useEffect(() => { if (!loading && !user) router.push('/') }, [user, loading])
   useEffect(() => { if (user) { fetchTeamRules(); fetchHistory(); fetchUsers() } }, [user])
@@ -155,6 +158,10 @@ export default function ConfiguracoesPage() {
 
       setImportLog({ success: true, filename: file.name, total })
       fetchHistory()
+      // Recalcula cache automaticamente após importação
+      setBuildingCache(true)
+      setCacheMsg('Recalculando cache do dashboard...')
+      buildAndSaveCache((msg) => setCacheMsg(msg)).then(() => setBuildingCache(false)).catch(() => setBuildingCache(false))
     } catch (err) {
       setImportLog({ error: `Erro ao processar: ${err.message}` })
     }
@@ -162,6 +169,17 @@ export default function ConfiguracoesPage() {
     setImporting(false)
     setProgress(null)
     if (fileRef.current) fileRef.current.value = ''
+  }
+
+  const recalcularCache = async () => {
+    setBuildingCache(true)
+    setCacheMsg('Iniciando...')
+    try {
+      await buildAndSaveCache((msg) => setCacheMsg(msg))
+    } catch (err) {
+      setCacheMsg('Erro: ' + err.message)
+    }
+    setBuildingCache(false)
   }
 
   const addRule = async () => {
@@ -258,6 +276,26 @@ export default function ConfiguracoesPage() {
             </table>
           </div>
         )}
+      </Section>
+
+      <Section title="⚡ Cache do Dashboard" subtitle="O cache é atualizado automaticamente após cada importação. Use o botão abaixo para recalcular manualmente se necessário.">
+        <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={recalcularCache}
+            disabled={buildingCache}
+            style={{ ...btnPrimary, opacity: buildingCache ? 0.6 : 1, cursor: buildingCache ? 'not-allowed' : 'pointer' }}
+          >
+            {buildingCache ? '⏳ Calculando...' : '🔄 Recalcular Cache'}
+          </button>
+          {cacheMsg && (
+            <span style={{ color: cacheMsg.includes('✅') ? '#6ee7b7' : cacheMsg.includes('Erro') ? '#fca5a5' : 'rgba(255,255,255,0.5)', fontSize: '13px' }}>
+              {cacheMsg}
+            </span>
+          )}
+        </div>
+        <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', marginTop: '12px' }}>
+          ⚠️ O cálculo pode levar alguns minutos dependendo do volume de dados. Não feche a aba.
+        </p>
       </Section>
 
       <Section title="👥 Regras de Equipes" subtitle="Advogados têm prioridade sobre a área. Ex: Administrativo = Passivas. Trabalhista e Tributário são ignorados.">
