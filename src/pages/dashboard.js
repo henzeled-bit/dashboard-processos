@@ -4,8 +4,8 @@ import { useAuth } from '../hooks/useAuth'
 import Layout from '../components/Layout'
 import { supabase } from '../lib/supabase'
 import {
-  BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+  BarChart, Bar, LineChart, Line, ComposedChart,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Cell
 } from 'recharts'
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899']
@@ -52,14 +52,19 @@ const CustomTooltip = ({ active, payload, label }) => {
   )
 }
 
+// Limpa valores null/string "null"
+function clean(v) {
+  if (v === null || v === undefined) return null
+  if (typeof v === 'string' && v.trim().toLowerCase() === 'null') return null
+  return v
+}
+
 export default function DashboardPage() {
   const { user, loading } = useAuth()
   const router = useRouter()
   const [filtroEquipe, setFiltroEquipe] = useState('Todas')
   const [filtroAno, setFiltroAno] = useState('Todos')
   const [fetching, setFetching] = useState(true)
-
-  // Dados agregados — sem trazer registros individuais
   const [stats, setStats] = useState(null)
   const [anos, setAnos] = useState([])
   const [equipes, setEquipes] = useState([])
@@ -70,91 +75,83 @@ export default function DashboardPage() {
 
   const fetchAll = async () => {
     setFetching(true)
-    await Promise.all([fetchAnos(), fetchEquipes(), fetchStats()])
+    await Promise.all([fetchMeta(), fetchStats()])
     setFetching(false)
   }
 
-  const fetchAnos = async () => {
-    // Busca anos distintos de cadastro e encerramento
-    const { data } = await supabase.rpc('get_anos_disponiveis')
-    if (data) setAnos(data.map(r => r.ano).filter(Boolean).sort().reverse())
-    else {
-      // fallback: busca amostras
-      const { data: d1 } = await supabase.from('processos').select('createdate').not('createdate', 'is', null).limit(1000)
-      const { data: d2 } = await supabase.from('processos').select('closedate').not('closedate', 'is', null).limit(1000)
-      const anosSet = new Set()
-      ;(d1 || []).forEach(r => r.createdate && anosSet.add(r.createdate.substring(0, 4)))
-      ;(d2 || []).forEach(r => r.closedate && anosSet.add(r.closedate.substring(0, 4)))
-      setAnos([...anosSet].sort().reverse())
-    }
-  }
-
-  const fetchEquipes = async () => {
-    const { data } = await supabase.from('processos').select('team').not('team', 'is', null).limit(5000)
-    const eq = [...new Set((data || []).map(r => r.team).filter(Boolean))].sort()
-    setEquipes(eq)
-  }
-
-  const buildFilters = () => {
-    let q = supabase.from('processos').select('*', { count: 'exact', head: true })
-    if (filtroEquipe !== 'Todas') q = q.eq('team', filtroEquipe)
-    return { equipe: filtroEquipe, ano: filtroAno }
+  const fetchMeta = async () => {
+    // Anos e equipes distintos via amostra
+    const [{ data: d1 }, { data: d2 }, { data: d3 }] = await Promise.all([
+      supabase.from('processos').select('createdate').not('createdate', 'is', null).limit(2000),
+      supabase.from('processos').select('closedate').not('closedate', 'is', null).limit(2000),
+      supabase.from('processos').select('team').not('team', 'is', null).limit(2000),
+    ])
+    const anosSet = new Set()
+    ;(d1 || []).forEach(r => r.createdate && anosSet.add(r.createdate.substring(0, 4)))
+    ;(d2 || []).forEach(r => r.closedate && anosSet.add(r.closedate.substring(0, 4)))
+    setAnos([...anosSet].sort().reverse())
+    setEquipes([...new Set((d3 || []).map(r => r.team).filter(Boolean))].sort())
   }
 
   const fetchStats = async () => {
     setFetching(true)
     try {
-      const eqFilter = filtroEquipe !== 'Todas'
       const anoFilter = filtroAno !== 'Todos'
+      const eqFilter = filtroEquipe !== 'Todas'
 
-      // Busca contagens principais
+      // Total geral na base
       let qTotal = supabase.from('processos').select('*', { count: 'exact', head: true })
       if (eqFilter) qTotal = qTotal.eq('team', filtroEquipe)
+      const { count: totalBase } = await qTotal
 
-      let qFiltro = supabase.from('processos').select('*', { count: 'exact', head: true })
-      if (eqFilter) qFiltro = qFiltro.eq('team', filtroEquipe)
-      if (anoFilter) qFiltro = qFiltro.or(`createdate.gte.${filtroAno}-01-01,closedate.gte.${filtroAno}-01-01`).or(`createdate.lte.${filtroAno}-12-31,closedate.lte.${filtroAno}-12-31`)
-
-      // Busca uma amostra menor para calcular métricas (máx 3000 registros filtrados)
-      let qSample = supabase.from('processos')
-        .select('createdate,closedate,closedatepartial,distributiondate,team,namestate,closereason,totalvalue,namearea')
+      // Busca amostra filtrada (até 5000 registros)
+      let q = supabase.from('processos')
+        .select('createdate,closedate,closedatepartial,distributiondate,team,namestate,closereason,totalvalue')
+        .limit(5000)
         .order('createdate', { ascending: false })
-        .limit(3000)
-      if (eqFilter) qSample = qSample.eq('team', filtroEquipe)
-      if (anoFilter) {
-        qSample = qSample.or(`createdate.gte.${filtroAno}-01-01,closedate.gte.${filtroAno}-01-01`)
-      }
+      if (eqFilter) q = q.eq('team', filtroEquipe)
+      if (anoFilter) q = q.or(`createdate.gte.${filtroAno}-01-01,closedate.gte.${filtroAno}-01-01`)
 
-      const [{ count: totalBase }, { count: totalFiltro }, { data: sample }] = await Promise.all([
-        qTotal,
-        qFiltro,
-        qSample
-      ])
+      const { data: sample } = await q
+      const rows = (sample || []).filter(p => {
+        if (!anoFilter) return true
+        return p.createdate?.startsWith(filtroAno) || p.closedate?.startsWith(filtroAno)
+      })
 
-      const rows = sample || []
-
-      // Filtra amostra pelo ano corretamente
-      const filtered = anoFilter
-        ? rows.filter(p => p.createdate?.startsWith(filtroAno) || p.closedate?.startsWith(filtroAno))
-        : rows
-
-      const encerrados = filtered.filter(p => p.closedate)
-      const ativos = filtered.filter(p => !p.closedate)
+      // Cadastros e encerramentos no período
+      const cadastrosNoPeriodo = rows.filter(p => !anoFilter || p.createdate?.startsWith(filtroAno))
+      const encerradosNoPeriodo = rows.filter(p => p.closedate && (!anoFilter || p.closedate.startsWith(filtroAno)))
+      const ativos = rows.filter(p => !p.closedate)
 
       // Prazo 30 dias
-      const comPrazo = encerrados.filter(p => p.closedatepartial && p.closedate)
-      const dentroPrazo = comPrazo.filter(p => {
-        const d1 = new Date(p.closedatepartial), d2 = new Date(p.closedate)
-        return Math.round((d2 - d1) / 86400000) <= 30
-      })
+      const comPrazo = encerradosNoPeriodo.filter(p => p.closedatepartial && p.closedate)
+      const dentroPrazo = comPrazo.filter(p => Math.round((new Date(p.closedate) - new Date(p.closedatepartial)) / 86400000) <= 30)
       const pctDentro = comPrazo.length > 0 ? Math.round(dentroPrazo.length / comPrazo.length * 100) : 0
 
       // Valor total
-      const valorTotal = filtered.reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
+      const valorTotal = rows.reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
 
-      // Cadastros vs encerramentos por mês
+      // Tempo médio Ajuiz→Cadastro (invertido: quando recebemos após ajuizamento)
+      const ajuizCad = rows.filter(p => p.distributiondate && p.createdate)
+      const tempoAjuizCad = ajuizCad.length > 0
+        ? Math.round(ajuizCad.reduce((s, p) => s + Math.abs(Math.round((new Date(p.createdate) - new Date(p.distributiondate)) / 86400000)), 0) / ajuizCad.length)
+        : null
+
+      // Tempo médio Cadastro→Encerramento PGJ
+      const cadEnc = encerradosNoPeriodo.filter(p => p.createdate && p.closedate)
+      const tempoCadEnc = cadEnc.length > 0
+        ? Math.round(cadEnc.reduce((s, p) => s + Math.abs(Math.round((new Date(p.closedate) - new Date(p.createdate)) / 86400000)), 0) / cadEnc.length)
+        : null
+
+      // Tempo médio Ajuiz→Encerramento
+      const ajuizEnc = encerradosNoPeriodo.filter(p => p.distributiondate && p.closedate)
+      const tempoAjuizEnc = ajuizEnc.length > 0
+        ? Math.round(ajuizEnc.reduce((s, p) => s + Math.abs(Math.round((new Date(p.closedate) - new Date(p.distributiondate)) / 86400000)), 0) / ajuizEnc.length)
+        : null
+
+      // ---- GRÁFICO MENSAL (ano selecionado) ----
       const mesesMap = {}
-      filtered.forEach(p => {
+      rows.forEach(p => {
         if (p.createdate && (!anoFilter || p.createdate.startsWith(filtroAno))) {
           const m = p.createdate.substring(0, 7)
           mesesMap[m] = mesesMap[m] || { mes: m, Cadastros: 0, Encerramentos: 0 }
@@ -166,12 +163,36 @@ export default function DashboardPage() {
           mesesMap[m].Encerramentos++
         }
       })
-      const mesesData = Object.values(mesesMap).sort((a, b) => a.mes.localeCompare(b.mes))
-        .map(d => ({ ...d, mes: d.mes.replace('-', '/') }))
+      // Adiciona linha de ativos acumulados por mês
+      let ativoAcum = 0
+      const mesesData = Object.values(mesesMap).sort((a, b) => a.mes.localeCompare(b.mes)).map(d => {
+        ativoAcum += d.Cadastros - d.Encerramentos
+        return { ...d, mes: d.mes.replace('-', '/'), Ativos: Math.max(0, ativoAcum) }
+      })
 
-      // Por equipe
+      // ---- EVOLUÇÃO ANUAL DA BASE ----
+      const anoMap = {}
+      rows.forEach(p => {
+        if (p.createdate) {
+          const a = p.createdate.substring(0, 4)
+          anoMap[a] = anoMap[a] || { ano: a, Cadastros: 0, Encerramentos: 0 }
+          anoMap[a].Cadastros++
+        }
+        if (p.closedate) {
+          const a = p.closedate.substring(0, 4)
+          anoMap[a] = anoMap[a] || { ano: a, Cadastros: 0, Encerramentos: 0 }
+          anoMap[a].Encerramentos++
+        }
+      })
+      let baseAcum = 0
+      const evolucaoBase = Object.values(anoMap).sort((a, b) => a.ano.localeCompare(b.ano)).map(d => {
+        baseAcum += d.Cadastros - d.Encerramentos
+        return { ...d, Base: Math.max(0, baseAcum) }
+      })
+
+      // ---- POR EQUIPE ----
       const equipesMap = {}
-      filtered.forEach(p => {
+      rows.forEach(p => {
         const eq = p.team || 'Sem Equipe'
         equipesMap[eq] = equipesMap[eq] || { equipe: eq, Ativos: 0, Encerrados: 0, Valor: 0 }
         if (p.closedate) equipesMap[eq].Encerrados++
@@ -180,9 +201,9 @@ export default function DashboardPage() {
       })
       const equipesData = Object.values(equipesMap)
 
-      // Prazo por equipe
+      // ---- PRAZO POR EQUIPE ----
       const prazoMap = {}
-      encerrados.filter(p => p.closedatepartial).forEach(p => {
+      encerradosNoPeriodo.filter(p => p.closedatepartial).forEach(p => {
         const eq = p.team || 'Sem Equipe'
         prazoMap[eq] = prazoMap[eq] || { equipe: eq, 'Dentro do Prazo': 0, 'Fora do Prazo': 0 }
         const diff = Math.round((new Date(p.closedate) - new Date(p.closedatepartial)) / 86400000)
@@ -191,42 +212,34 @@ export default function DashboardPage() {
       })
       const prazoEquipeData = Object.values(prazoMap)
 
-      // Motivos
+      // ---- MOTIVOS (sem null) ----
       const motivosMap = {}
-      encerrados.filter(p => p.closereason).forEach(p => { motivosMap[p.closereason] = (motivosMap[p.closereason] || 0) + 1 })
+      encerradosNoPeriodo.forEach(p => {
+        const motivo = clean(p.closereason)
+        if (motivo) motivosMap[motivo] = (motivosMap[motivo] || 0) + 1
+      })
       const motivosData = Object.entries(motivosMap).map(([name, value]) => ({ name, value })).sort((a, b) => b.value - a.value).slice(0, 8)
 
-      // Estados
+      // ---- ESTADOS ----
       const estadosMap = {}
-      filtered.forEach(p => { if (p.namestate) estadosMap[p.namestate] = (estadosMap[p.namestate] || 0) + 1 })
+      rows.forEach(p => { if (p.namestate) estadosMap[p.namestate] = (estadosMap[p.namestate] || 0) + 1 })
       const estadosData = Object.entries(estadosMap).map(([estado, total]) => ({ estado, total })).sort((a, b) => b.total - a.total).slice(0, 8)
 
-      // Tempo médio
-      const cadAjuiz = filtered.filter(p => p.createdate && p.distributiondate)
-      const tempoCA = cadAjuiz.length > 0
-        ? Math.round(cadAjuiz.reduce((s, p) => s + Math.abs(Math.round((new Date(p.distributiondate) - new Date(p.createdate)) / 86400000)), 0) / cadAjuiz.length)
-        : null
-
-      const ajuizEnc = encerrados.filter(p => p.distributiondate && p.closedate)
-      const tempoAE = ajuizEnc.length > 0
-        ? Math.round(ajuizEnc.reduce((s, p) => s + Math.abs(Math.round((new Date(p.closedate) - new Date(p.distributiondate)) / 86400000)), 0) / ajuizEnc.length)
-        : null
-
       setStats({
-        totalBase, totalFiltro: totalFiltro || filtered.length,
-        ativos: ativos.length, encerrados: encerrados.length,
+        totalBase,
+        cadastros: cadastrosNoPeriodo.length,
+        encerrados: encerradosNoPeriodo.length,
+        ativos: ativos.length,
         pctDentro, dentroPrazo: dentroPrazo.length, comPrazo: comPrazo.length,
-        valorTotal, tempoCA, tempoAE,
-        mesesData, equipesData, prazoEquipeData, motivosData, estadosData
+        valorTotal, tempoAjuizCad, tempoCadEnc, tempoAjuizEnc,
+        mesesData, evolucaoBase, equipesData, prazoEquipeData, motivosData, estadosData
       })
-    } catch (err) {
-      console.error(err)
-    }
+    } catch (err) { console.error(err) }
     setFetching(false)
   }
 
   const filterStyle = { background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px', color: '#fff', padding: '8px 14px', fontSize: '13px', cursor: 'pointer' }
-  const subtitulo = filtroAno !== 'Todos' ? `Cadastros e encerramentos de ${filtroAno}` : 'Todos os períodos'
+  const subtitulo = filtroAno !== 'Todos' ? `Ano de ${filtroAno}` : 'Todos os períodos'
 
   if (loading) return <Layout activeTab="dashboard"><div style={{ textAlign: 'center', padding: '80px', color: 'rgba(255,255,255,0.4)' }}>Carregando...</div></Layout>
 
@@ -254,39 +267,66 @@ export default function DashboardPage() {
       </div>
 
       {fetching && !stats ? (
-        <div style={{ textAlign: 'center', padding: '80px', color: 'rgba(255,255,255,0.4)' }}>
-          ⏳ Calculando métricas...
-        </div>
+        <div style={{ textAlign: 'center', padding: '80px', color: 'rgba(255,255,255,0.4)' }}>⏳ Calculando métricas...</div>
       ) : stats ? (
         <>
-          {/* Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '28px' }}>
-            <StatCard title="Total na Base" value={stats.totalBase?.toLocaleString('pt-BR') || '-'} subtitle="todos os processos importados" icon="📁" color="#3b82f6" />
-            <StatCard title="Processos Ativos" value={stats.ativos.toLocaleString('pt-BR')} subtitle={`na amostra filtrada`} icon="🟢" color="#10b981" />
-            <StatCard title={filtroAno !== 'Todos' ? `Encerrados em ${filtroAno}` : 'Encerrados'} value={stats.encerrados.toLocaleString('pt-BR')} icon="✅" color="#8b5cf6" />
+          {/* Cards — linha 1 */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '16px', marginBottom: '16px' }}>
+            <StatCard title="Processos Ativos" value={stats.ativos.toLocaleString('pt-BR')} subtitle="sem data de encerramento" icon="🟢" color="#10b981" />
+            <StatCard title={filtroAno !== 'Todos' ? `Cadastros em ${filtroAno}` : 'Cadastros'} value={stats.cadastros.toLocaleString('pt-BR')} subtitle={subtitulo} icon="📥" color="#3b82f6" />
+            <StatCard title={filtroAno !== 'Todos' ? `Encerrados em ${filtroAno}` : 'Encerrados'} value={stats.encerrados.toLocaleString('pt-BR')} subtitle={subtitulo} icon="✅" color="#8b5cf6" />
             <StatCard title="Dentro do Prazo (30d)" value={`${stats.pctDentro}%`} subtitle={`${stats.dentroPrazo} de ${stats.comPrazo} encerramentos`} icon="⏱️" color={stats.pctDentro >= 80 ? '#10b981' : '#ef4444'} />
-            <StatCard title="Valor Total" value={`R$ ${((stats.valorTotal || 0) / 1000000).toFixed(1)}M`} icon="💰" color="#f59e0b" />
-            <StatCard title="Tempo Médio Cad→Ajuiz" value={stats.tempoCA ? `${stats.tempoCA}d` : '-'} subtitle="dias" icon="📅" color="#06b6d4" />
-            <StatCard title="Tempo Médio Ajuiz→Enc" value={stats.tempoAE ? `${stats.tempoAE}d` : '-'} subtitle="dias" icon="📆" color="#ec4899" />
+            <StatCard title="Valor Total" value={`R$ ${((stats.valorTotal || 0) / 1000000).toFixed(1)}M`} subtitle={subtitulo} icon="💰" color="#f59e0b" />
           </div>
 
-          {/* Linha 1 */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
-            <ChartCard title="Cadastros vs Encerramentos" subtitle={subtitulo}>
-              <ResponsiveContainer width="100%" height={280}>
-                <BarChart data={stats.mesesData}>
+          {/* Cards — linha 2 (tempos médios) */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '16px', marginBottom: '28px' }}>
+            <StatCard title="Tempo Médio Ajuiz→Cad" value={stats.tempoAjuizCad ? `${stats.tempoAjuizCad}d` : '-'} subtitle="dias entre ajuizamento e entrada na base" icon="📋" color="#06b6d4" />
+            <StatCard title="Tempo Médio Cad→Enc" value={stats.tempoCadEnc ? `${stats.tempoCadEnc}d` : '-'} subtitle="dias entre cadastro e encerramento PGJ" icon="📅" color="#ec4899" />
+            <StatCard title="Tempo Médio Ajuiz→Enc" value={stats.tempoAjuizEnc ? `${stats.tempoAjuizEnc}d` : '-'} subtitle="dias entre ajuizamento e encerramento" icon="📆" color="#f59e0b" />
+          </div>
+
+          {/* Gráfico mensal do ano selecionado */}
+          <div style={{ marginBottom: '20px' }}>
+            <ChartCard title={filtroAno !== 'Todos' ? `Movimento Mensal — ${filtroAno}` : 'Movimento Mensal'} subtitle="Cadastros, encerramentos e ativos acumulados no período">
+              <ResponsiveContainer width="100%" height={300}>
+                <ComposedChart data={stats.mesesData}>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                   <XAxis dataKey="mes" tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
-                  <YAxis tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
+                  <YAxis yAxisId="left" tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
                   <Tooltip content={<CustomTooltip />} />
                   <Legend wrapperStyle={{ color: 'rgba(255,255,255,0.6)', fontSize: 13 }} />
-                  <Bar dataKey="Cadastros" fill="#3b82f6" radius={[4,4,0,0]} />
-                  <Bar dataKey="Encerramentos" fill="#10b981" radius={[4,4,0,0]} />
-                </BarChart>
+                  <Bar yAxisId="left" dataKey="Cadastros" fill="#3b82f6" radius={[4,4,0,0]} />
+                  <Bar yAxisId="left" dataKey="Encerramentos" fill="#10b981" radius={[4,4,0,0]} />
+                  <Line yAxisId="right" type="monotone" dataKey="Ativos" stroke="#f59e0b" strokeWidth={2} dot={{ fill: '#f59e0b', r: 3 }} />
+                </ComposedChart>
               </ResponsiveContainer>
             </ChartCard>
+          </div>
 
-            <ChartCard title="Processos por Equipe" subtitle="Ativos e encerrados na amostra">
+          {/* Evolução anual da base */}
+          <div style={{ marginBottom: '20px' }}>
+            <ChartCard title="Evolução Anual da Base" subtitle="Cadastros, encerramentos e crescimento acumulado por ano">
+              <ResponsiveContainer width="100%" height={280}>
+                <ComposedChart data={stats.evolucaoBase}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+                  <XAxis dataKey="ano" tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
+                  <YAxis yAxisId="left" tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
+                  <YAxis yAxisId="right" orientation="right" tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
+                  <Tooltip content={<CustomTooltip />} />
+                  <Legend wrapperStyle={{ color: 'rgba(255,255,255,0.6)', fontSize: 13 }} />
+                  <Bar yAxisId="left" dataKey="Cadastros" fill="#3b82f6" radius={[4,4,0,0]} />
+                  <Bar yAxisId="left" dataKey="Encerramentos" fill="#10b981" radius={[4,4,0,0]} />
+                  <Line yAxisId="right" type="monotone" dataKey="Base" stroke="#f59e0b" strokeWidth={2} dot={{ fill: '#f59e0b', r: 4 }} />
+                </ComposedChart>
+              </ResponsiveContainer>
+            </ChartCard>
+          </div>
+
+          {/* Linha: Por equipe + Prazo */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+            <ChartCard title="Processos por Equipe" subtitle="Ativos e encerrados">
               <ResponsiveContainer width="100%" height={280}>
                 <BarChart data={stats.equipesData} layout="vertical">
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
@@ -299,10 +339,7 @@ export default function DashboardPage() {
                 </BarChart>
               </ResponsiveContainer>
             </ChartCard>
-          </div>
 
-          {/* Linha 2 */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
             <ChartCard title="Prazo de Encerramento por Equipe" subtitle="Dentro vs fora de 30 dias (TJ → PGJ)">
               {stats.prazoEquipeData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={280}>
@@ -320,29 +357,17 @@ export default function DashboardPage() {
                 <div style={{ textAlign: 'center', padding: '60px', color: 'rgba(255,255,255,0.25)', fontSize: '14px' }}>Sem dados de encerramento no período</div>
               )}
             </ChartCard>
-
-            <ChartCard title="Valor por Equipe" subtitle="Soma do valor da causa">
-              <ResponsiveContainer width="100%" height={280}>
-                <PieChart>
-                  <Pie data={stats.equipesData.filter(d => d.Valor > 0)} dataKey="Valor" nameKey="equipe" cx="50%" cy="50%" outerRadius={100}
-                    label={({ equipe, percent }) => percent > 0.05 ? `${equipe} ${(percent * 100).toFixed(0)}%` : ''}>
-                    {stats.equipesData.map((e, i) => <Cell key={i} fill={TEAM_COLORS[e.equipe] || COLORS[i % COLORS.length]} />)}
-                  </Pie>
-                  <Tooltip formatter={v => `R$ ${v.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`} content={<CustomTooltip />} />
-                </PieChart>
-              </ResponsiveContainer>
-            </ChartCard>
           </div>
 
-          {/* Linha 3 */}
+          {/* Linha: Motivos + Estados */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
-            <ChartCard title="Motivos de Encerramento" subtitle="Top 8">
+            <ChartCard title="Motivos de Encerramento" subtitle="Top 8 — processos ativos excluídos">
               {stats.motivosData.length > 0 ? (
                 <ResponsiveContainer width="100%" height={260}>
                   <BarChart data={stats.motivosData} layout="vertical">
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                     <XAxis type="number" tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 11 }} />
-                    <YAxis dataKey="name" type="category" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={120} />
+                    <YAxis dataKey="name" type="category" tick={{ fill: 'rgba(255,255,255,0.5)', fontSize: 10 }} width={130} />
                     <Tooltip content={<CustomTooltip />} />
                     <Bar dataKey="value" name="Processos" radius={[0,4,4,0]}>
                       {stats.motivosData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
