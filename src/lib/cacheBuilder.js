@@ -96,7 +96,8 @@ export async function buildAndSaveCache(onProgress) {
     const valorTotal = rows.reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
 
     // Tempos
-    const tempoAjuizCad = calcMedia(rows.filter(p => p.distributiondate && p.createdate), p => Math.abs(daysDiff(p.distributiondate, p.createdate)))
+    // Ajuiz→Cad: usa apenas processos cadastrados no período para não distorcer com processos antigos encerrados
+    const tempoAjuizCad = calcMedia(cadastrosNoPeriodo.filter(p => p.distributiondate && p.createdate), p => Math.abs(daysDiff(p.distributiondate, p.createdate)))
     const tempoCadEnc = calcMedia(encerradosNoPeriodo.filter(p => p.createdate && p.closedate), p => Math.abs(daysDiff(p.createdate, p.closedate)))
     const tempoAjuizEnc = calcMedia(encerradosNoPeriodo.filter(p => p.distributiondate && p.closedate), p => Math.abs(daysDiff(p.distributiondate, p.closedate)))
 
