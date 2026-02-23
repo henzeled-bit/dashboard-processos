@@ -83,7 +83,12 @@ export async function buildAndSaveCache(onProgress) {
     })
 
     // Prazo 30d
-    const comPrazo = encerradosNoPeriodo.filter(p => p.closedatepartial && p.closedate)
+    const comPrazo = encerradosNoPeriodo.filter(p => {
+      if (!p.closedatepartial || !p.closedate) return false
+      const motivo = (p.closereason || '').toLowerCase()
+      if (motivo.includes('acerto de base') || motivo.includes('migrado com baixa')) return false
+      return true
+    })
     const dentro = comPrazo.filter(p => daysDiff(p.closedatepartial, p.closedate) <= 30)
     const pctDentro = comPrazo.length > 0 ? Math.round(dentro.length / comPrazo.length * 100) : 0
 
@@ -168,7 +173,7 @@ export async function buildAndSaveCache(onProgress) {
       cadastros: cadastrosNoPeriodo.length,
       encerrados: encerradosNoPeriodo.length,
       pctDentro, dentroPrazo: dentro.length, comPrazo: comPrazo.length,
-      valorTotal, tempoAjuizCad, tempoCadEnc, tempoAjuizEnc,
+      valorTotal, valorMedio: rows.length > 0 ? valorTotal / rows.length : 0, tempoAjuizCad, tempoCadEnc, tempoAjuizEnc,
       mesesData, evolucaoBase, equipesData, prazoEquipeData, motivosData, estadosData
     }
 
