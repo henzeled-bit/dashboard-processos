@@ -73,7 +73,7 @@ export default function ConfiguracoesPage() {
       let raw = []
 
       if (file.name.toLowerCase().endsWith('.csv')) {
-        const decoder = new TextDecoder('latin-1')
+        const decoder = new TextDecoder('iso-8859-1')
         const text = decoder.decode(buffer)
         const lines = text.split(/\r?\n/)
         raw = lines.map(line => {
