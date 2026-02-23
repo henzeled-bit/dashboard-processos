@@ -10,6 +10,29 @@ import {
 
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#ec4899']
 
+function fmtMoney(v) {
+  if (!v) return 'R$ 0'
+  if (v >= 1e9) return `R$ ${(v/1e9).toFixed(1)}B`
+  if (v >= 1e6) return `R$ ${(v/1e6).toFixed(1)}M`
+  if (v >= 1e3) return `R$ ${(v/1e3).toFixed(0)}K`
+  return `R$ ${v.toLocaleString('pt-BR', {minimumFractionDigits:0, maximumFractionDigits:0})}`
+}
+
+function fmtDias(d) {
+  if (!d) return '-'
+  if (d >= 365) {
+    const anos = Math.floor(d / 365)
+    const meses = Math.round((d % 365) / 30)
+    return meses > 0 ? `${anos}a ${meses}m` : `${anos}a`
+  }
+  if (d >= 30) {
+    const meses = Math.floor(d / 30)
+    const dias = d % 30
+    return dias > 0 ? `${meses}m ${dias}d` : `${meses}m`
+  }
+  return `${d}d`
+}
+
 function StatCard({ title, value, subtitle, icon, color = '#3b82f6' }) {
   return (
     <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '24px', position: 'relative', overflow: 'hidden' }}>
@@ -129,14 +152,14 @@ export default function DashboardPage() {
             <StatCard title="Processos Ativos" value={stats.ativos.toLocaleString('pt-BR')} subtitle="sem data de encerramento" icon="🟢" color="#10b981" />
             <StatCard title={filtroAno !== 'Todos' ? `Cadastros em ${filtroAno}` : 'Cadastros'} value={stats.cadastros.toLocaleString('pt-BR')} subtitle={subtitulo} icon="📥" color="#3b82f6" />
             <StatCard title={filtroAno !== 'Todos' ? `Encerrados em ${filtroAno}` : 'Encerrados'} value={stats.encerrados.toLocaleString('pt-BR')} subtitle={subtitulo} icon="✅" color="#8b5cf6" />
-            <StatCard title="Dentro do Prazo (30d)" value={`${stats.pctDentro}%`} subtitle={`${stats.dentroPrazo} de ${stats.comPrazo} encerramentos`} icon="⏱️" color={stats.pctDentro >= 80 ? '#10b981' : '#ef4444'} />
-            <StatCard title="Valor Total" value={`R$ ${((stats.valorTotal || 0) / 1000000).toFixed(1)}M`} subtitle={subtitulo} icon="💰" color="#f59e0b" />
+            <StatCard title="Dentro do Prazo de Remuneração (30d)" value={`${stats.pctDentro}%`} subtitle={`${stats.dentroPrazo} de ${stats.comPrazo} encerramentos`} icon="⏱️" color={stats.pctDentro >= 80 ? '#10b981' : '#ef4444'} />
+            <StatCard title="Soma do Valor da Causa" value={fmtMoney(stats.valorTotal)} subtitle={`Média: ${fmtMoney(stats.valorMedio)} · ${subtitulo}`} icon="💰" color="#f59e0b" />
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '16px', marginBottom: '28px' }}>
-            <StatCard title="Tempo Médio Ajuiz→Cad" value={stats.tempoAjuizCad ? `${stats.tempoAjuizCad}d` : '-'} subtitle="dias entre ajuizamento e entrada na base" icon="📋" color="#06b6d4" />
-            <StatCard title="Tempo Médio Cad→Enc" value={stats.tempoCadEnc ? `${stats.tempoCadEnc}d` : '-'} subtitle="dias entre cadastro e encerramento PGJ" icon="📅" color="#ec4899" />
-            <StatCard title="Tempo Médio Ajuiz→Enc" value={stats.tempoAjuizEnc ? `${stats.tempoAjuizEnc}d` : '-'} subtitle="dias entre ajuizamento e encerramento" icon="📆" color="#f59e0b" />
+            <StatCard title="Tempo Médio Ajuiz→Cad" value={fmtDias(stats.tempoAjuizCad)} subtitle="entre ajuizamento e entrada na base" icon="📋" color="#06b6d4" />
+            <StatCard title="Tempo Médio Cad→Enc" value={fmtDias(stats.tempoCadEnc)} subtitle="entre cadastro e encerramento PGJ" icon="📅" color="#ec4899" />
+            <StatCard title="Tempo Médio Ajuiz→Enc" value={fmtDias(stats.tempoAjuizEnc)} subtitle="entre ajuizamento e encerramento" icon="📆" color="#f59e0b" />
           </div>
 
           <div style={{ marginBottom: '20px' }}>
