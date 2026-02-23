@@ -160,9 +160,10 @@ export default function ConfiguracoesPage() {
           }
         }
 
-        // Atualiza progresso
+        // Atualiza progresso — await deixa o browser renderizar antes do próximo lote
         const current = Math.min(i + BATCH, total)
         setProgress({ current, total, pct: Math.round((current / total) * 100) })
+        await new Promise(resolve => setTimeout(resolve, 0))
       }
 
       await supabase.from('import_history').insert({
