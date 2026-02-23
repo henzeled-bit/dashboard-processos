@@ -72,19 +72,10 @@ export default function ConfiguracoesPage() {
       const buffer = await file.arrayBuffer()
       let raw = []
 
-      if (file.name.toLowerCase().endsWith('.csv')) {
-        const decoder = new TextDecoder('iso-8859-1')
-        const text = decoder.decode(buffer)
-        const lines = text.split(/\r?\n/)
-        raw = lines.map(line => {
-          const sep = line.includes(';') ? ';' : ','
-          return line.split(sep).map(cell => cell.replace(/^"(.*)"$/, '$1').trim())
-        }).filter(row => row.some(c => c !== ''))
-      } else {
-        const wb = XLSX.read(buffer, { type: 'array', cellDates: false })
-        const ws = wb.Sheets[wb.SheetNames[0]]
-        raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
-      }
+      // XLSX suporta .csv e .xlsx, inclusive com encoding latin e separador ponto-e-vírgula
+      const wb = XLSX.read(buffer, { type: 'array', cellDates: false })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })}
 
       if (raw.length < 2) {
         setImportLog({ error: 'Arquivo vazio ou sem dados.' })
