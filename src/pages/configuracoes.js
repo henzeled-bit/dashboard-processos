@@ -109,6 +109,8 @@ export default function ConfiguracoesPage() {
           headers.forEach((h, idx) => { obj[h] = row[idx] })
           const norm = normalizeRow(obj, columnMapping)
           if (!norm.processid) continue
+          const teamCheck = calculateTeam({ namelawyer: norm.namelawyer, namearea: norm.namearea }, rules || [])
+          if (!teamCheck) continue // sem equipe = ignora
 
           const processid = norm.processid.toString().trim()
 
