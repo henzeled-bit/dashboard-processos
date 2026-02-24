@@ -153,7 +153,24 @@ export default function DashboardPage() {
             <StatCard title={filtroAno !== 'Todos' ? `Cadastros em ${filtroAno}` : 'Cadastros'} value={stats.cadastros.toLocaleString('pt-BR')} subtitle={subtitulo} icon="📥" color="#3b82f6" />
             <StatCard title={filtroAno !== 'Todos' ? `Encerrados em ${filtroAno}` : 'Encerrados'} value={stats.encerrados.toLocaleString('pt-BR')} subtitle={subtitulo} icon="✅" color="#8b5cf6" />
             <StatCard title="Dentro do Prazo de Remuneração (30d)" value={`${stats.pctDentro}%`} subtitle={`${stats.dentroPrazo} de ${stats.comPrazo} encerramentos`} icon="⏱️" color={stats.pctDentro >= 80 ? '#10b981' : '#ef4444'} />
-            <StatCard title="Valor da Carteira Ativa" value={fmtMoney(stats.valorTotal)} subtitle={`Média por processo ativo: ${fmtMoney(stats.valorMedio)}`} icon="💰" color="#f59e0b" />
+            <div style={{ background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px', padding: '24px', position: 'relative', overflow: 'hidden' }}>
+              <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: '3px', background: 'linear-gradient(90deg, #f59e0b, transparent)' }} />
+              <div style={{ fontSize: '24px', marginBottom: '12px' }}>💰</div>
+              <div style={{ color: 'rgba(255,255,255,0.5)', fontSize: '13px', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Valor da Carteira Ativa</div>
+              <div style={{ color: '#fff', fontSize: '28px', fontWeight: '700', letterSpacing: '-1px' }}>{fmtMoney(stats.valorTotal)}</div>
+              <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+                  <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}>📊 Média típica ({(stats.countNormais||0).toLocaleString('pt-BR')} proc.)</span>
+                  <span style={{ color: '#10b981', fontSize: '12px', fontWeight: '600' }}>{fmtMoney(stats.valorMedioAtivos)}</span>
+                </div>
+                {(stats.countEspeciais || 0) > 0 && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}>⭐ Especiais ({(stats.countEspeciais||0).toLocaleString('pt-BR')} proc. &gt; 3x mediana)</span>
+                    <span style={{ color: '#f59e0b', fontSize: '12px', fontWeight: '600' }}>{fmtMoney(stats.valorMedioEspeciais)}</span>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '28px' }}>
