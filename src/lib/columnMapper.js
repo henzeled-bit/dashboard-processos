@@ -74,7 +74,7 @@ export function calculateTeam(row, teamRules) {
     if (rule) return rule.team_name
   }
 
-  return 'Sem Equipe'
+  return null // sem regra = não importa
 }
 
 export function daysDiff(date1, date2) {
