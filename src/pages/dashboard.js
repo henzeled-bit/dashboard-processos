@@ -153,7 +153,7 @@ export default function DashboardPage() {
             <StatCard title={filtroAno !== 'Todos' ? `Cadastros em ${filtroAno}` : 'Cadastros'} value={stats.cadastros.toLocaleString('pt-BR')} subtitle={subtitulo} icon="📥" color="#3b82f6" />
             <StatCard title={filtroAno !== 'Todos' ? `Encerrados em ${filtroAno}` : 'Encerrados'} value={stats.encerrados.toLocaleString('pt-BR')} subtitle={subtitulo} icon="✅" color="#8b5cf6" />
             <StatCard title="Dentro do Prazo de Remuneração (30d)" value={`${stats.pctDentro}%`} subtitle={`${stats.dentroPrazo} de ${stats.comPrazo} encerramentos`} icon="⏱️" color={stats.pctDentro >= 80 ? '#10b981' : '#ef4444'} />
-            <StatCard title="Soma do Valor da Causa" value={fmtMoney(stats.valorTotal)} subtitle={`Média: ${fmtMoney(stats.valorMedio)} · ${subtitulo}`} icon="💰" color="#f59e0b" />
+            <StatCard title="Valor da Carteira Ativa" value={fmtMoney(stats.valorTotal)} subtitle={`Média por processo ativo: ${fmtMoney(stats.valorMedio)}`} icon="💰" color="#f59e0b" />
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '28px' }}>
