@@ -160,12 +160,12 @@ export default function DashboardPage() {
               <div style={{ color: '#fff', fontSize: '28px', fontWeight: '700', letterSpacing: '-1px' }}>{fmtMoney(stats.valorTotal)}</div>
               <div style={{ marginTop: '10px', paddingTop: '10px', borderTop: '1px solid rgba(255,255,255,0.08)' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                  <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}>📊 Média típica ({(stats.countNormais||0).toLocaleString('pt-BR')} proc.)</span>
+                  <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}>📊 Processo típico — média de {(stats.countNormais||0).toLocaleString('pt-BR')} proc.</span>
                   <span style={{ color: '#10b981', fontSize: '12px', fontWeight: '600' }}>{fmtMoney(stats.valorMedioAtivos)}</span>
                 </div>
                 {(stats.countEspeciais || 0) > 0 && (
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                    <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}>⭐ Especiais ({(stats.countEspeciais||0).toLocaleString('pt-BR')} proc. &gt; 3x mediana)</span>
+                    <span style={{ color: 'rgba(255,255,255,0.4)', fontSize: '11px' }}>⭐ Alto valor — média de {(stats.countEspeciais||0).toLocaleString('pt-BR')} proc. acima de {fmtMoney(stats.limiteOutlier)}</span>
                     <span style={{ color: '#f59e0b', fontSize: '12px', fontWeight: '600' }}>{fmtMoney(stats.valorMedioEspeciais)}</span>
                   </div>
                 )}
