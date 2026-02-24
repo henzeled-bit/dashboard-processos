@@ -79,7 +79,7 @@ export async function buildAndSaveCache(onProgress) {
     const cadastrosNoPeriodo = rows.filter(p => !anoFilter || p.createdate?.startsWith(ano))
     const ativos = all.filter(p => {
       if (eqFilter && p.team !== equipe) return false
-      return !p.closedate
+      return !p.closedate || p.closedate === ''
     })
 
     // Prazo 30d
@@ -94,7 +94,7 @@ export async function buildAndSaveCache(onProgress) {
 
     // Valor
     // Valor da causa: apenas processos ATIVOS (sem closedate)
-    const ativosParaValor = rows.filter(p => !p.closedate && parseFloat(p.totalvalue) > 0)
+    const ativosParaValor = rows.filter(p => (!p.closedate || p.closedate === '' || p.closedate === null) && parseFloat(p.totalvalue) > 0)
     const valoresOrdenados = ativosParaValor.map(p => parseFloat(p.totalvalue)).sort((a, b) => a - b)
 
     // Mediana
@@ -218,7 +218,7 @@ export async function buildAndSaveCache(onProgress) {
       pctDentro, dentroPrazo: dentro.length, comPrazo: comPrazo.length,
       valorTotal, valorNormais, valorEspeciais, valorMedioAtivos, valorMedioEspeciais,
       countEspeciais: ativosEspeciais.length, countNormais: ativosNormais.length,
-      mediana, limiteOutlier,
+      mediana: Math.round(mediana), limiteOutlier: Math.round(limiteOutlier),
       tempoAjuizCad, tempoCadAjuiz, pctNosAjuizamos, pctRecebidosAndamento,
       nosAjuizamosCount: nosAjuizamos.length, recebidosAndamentoCount: recebidosEmAndamento.length,
       tempoCadEnc, tempoAjuizEnc,
