@@ -94,9 +94,29 @@ export async function buildAndSaveCache(onProgress) {
 
     // Valor
     // Valor da causa: apenas processos ATIVOS (sem closedate)
-    const ativosParaValor = rows.filter(p => !p.closedate)
+    const ativosParaValor = rows.filter(p => !p.closedate && parseFloat(p.totalvalue) > 0)
+    const valoresOrdenados = ativosParaValor.map(p => parseFloat(p.totalvalue)).sort((a, b) => a - b)
+
+    // Mediana
+    const mid = Math.floor(valoresOrdenados.length / 2)
+    const mediana = valoresOrdenados.length === 0 ? 0
+      : valoresOrdenados.length % 2 === 0
+        ? (valoresOrdenados[mid - 1] + valoresOrdenados[mid]) / 2
+        : valoresOrdenados[mid]
+
+    // Limite = 3x a mediana
+    const limiteOutlier = mediana * 3
+
+    // Normais = abaixo do limite (exceto RJ que aceita todos)
+    const isRJ = equipe === 'RJ'
+    const ativosNormais = isRJ ? ativosParaValor : ativosParaValor.filter(p => parseFloat(p.totalvalue) <= limiteOutlier)
+    const ativosEspeciais = isRJ ? [] : ativosParaValor.filter(p => parseFloat(p.totalvalue) > limiteOutlier)
+
     const valorTotal = ativosParaValor.reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
-    const valorMedioAtivos = ativosParaValor.length > 0 ? valorTotal / ativosParaValor.length : 0
+    const valorNormais = ativosNormais.reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
+    const valorEspeciais = ativosEspeciais.reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
+    const valorMedioAtivos = ativosNormais.length > 0 ? valorNormais / ativosNormais.length : 0
+    const valorMedioEspeciais = ativosEspeciais.length > 0 ? valorEspeciais / ativosEspeciais.length : 0
 
     // Tempos
     // Processos com ambas as datas preenchidas
@@ -196,7 +216,9 @@ export async function buildAndSaveCache(onProgress) {
       cadastros: cadastrosNoPeriodo.length,
       encerrados: encerradosNoPeriodo.length,
       pctDentro, dentroPrazo: dentro.length, comPrazo: comPrazo.length,
-      valorTotal, valorMedio: valorMedioAtivos,
+      valorTotal, valorNormais, valorEspeciais, valorMedioAtivos, valorMedioEspeciais,
+      countEspeciais: ativosEspeciais.length, countNormais: ativosNormais.length,
+      mediana, limiteOutlier,
       tempoAjuizCad, tempoCadAjuiz, pctNosAjuizamos, pctRecebidosAndamento,
       nosAjuizamosCount: nosAjuizamos.length, recebidosAndamentoCount: recebidosEmAndamento.length,
       tempoCadEnc, tempoAjuizEnc,
