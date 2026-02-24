@@ -93,7 +93,10 @@ export async function buildAndSaveCache(onProgress) {
     const pctDentro = comPrazo.length > 0 ? Math.round(dentro.length / comPrazo.length * 100) : 0
 
     // Valor
-    const valorTotal = rows.reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
+    // Valor da causa: apenas processos ATIVOS (sem closedate)
+    const ativosParaValor = rows.filter(p => !p.closedate)
+    const valorTotal = ativosParaValor.reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
+    const valorMedioAtivos = ativosParaValor.length > 0 ? valorTotal / ativosParaValor.length : 0
 
     // Tempos
     // Processos com ambas as datas preenchidas
@@ -193,7 +196,7 @@ export async function buildAndSaveCache(onProgress) {
       cadastros: cadastrosNoPeriodo.length,
       encerrados: encerradosNoPeriodo.length,
       pctDentro, dentroPrazo: dentro.length, comPrazo: comPrazo.length,
-      valorTotal, valorMedio: rows.length > 0 ? valorTotal / rows.length : 0,
+      valorTotal, valorMedio: valorMedioAtivos,
       tempoAjuizCad, tempoCadAjuiz, pctNosAjuizamos, pctRecebidosAndamento,
       nosAjuizamosCount: nosAjuizamos.length, recebidosAndamentoCount: recebidosEmAndamento.length,
       tempoCadEnc, tempoAjuizEnc,
