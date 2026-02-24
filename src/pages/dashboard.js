@@ -156,8 +156,25 @@ export default function DashboardPage() {
             <StatCard title="Soma do Valor da Causa" value={fmtMoney(stats.valorTotal)} subtitle={`Média: ${fmtMoney(stats.valorMedio)} · ${subtitulo}`} icon="💰" color="#f59e0b" />
           </div>
 
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: '16px', marginBottom: '28px' }}>
-            <StatCard title="Tempo Médio Ajuiz→Cad" value={fmtDias(stats.tempoAjuizCad)} subtitle="entre ajuizamento e entrada na base" icon="📋" color="#06b6d4" />
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '16px', marginBottom: '28px' }}>
+            {/* Card Cad→Ajuiz: só para equipe Ativas */}
+            {filtroEquipe === 'Ativas' && (
+              <StatCard
+                title="Tempo Médio Cad→Ajuiz"
+                value={fmtDias(stats.tempoCadAjuiz)}
+                subtitle={`Processos que ajuizamos · ${stats.pctNosAjuizamos ?? 0}% do total (${(stats.nosAjuizamosCount || 0).toLocaleString('pt-BR')} proc.)`}
+                icon="⚖️"
+                color="#10b981"
+              />
+            )}
+            {/* Card Ajuiz→Cad: para todas as equipes */}
+            <StatCard
+              title="Tempo Médio Ajuiz→Cad"
+              value={fmtDias(stats.tempoAjuizCad)}
+              subtitle={`Recebidos em andamento · ${stats.pctRecebidosAndamento ?? 0}% do total (${(stats.recebidosAndamentoCount || 0).toLocaleString('pt-BR')} proc.)`}
+              icon="📋"
+              color="#06b6d4"
+            />
             <StatCard title="Tempo Médio Cad→Enc" value={fmtDias(stats.tempoCadEnc)} subtitle="entre cadastro e encerramento PGJ" icon="📅" color="#ec4899" />
             <StatCard title="Tempo Médio Ajuiz→Enc" value={fmtDias(stats.tempoAjuizEnc)} subtitle="entre ajuizamento e encerramento" icon="📆" color="#f59e0b" />
           </div>
