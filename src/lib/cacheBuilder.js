@@ -96,13 +96,27 @@ export async function buildAndSaveCache(onProgress) {
     const valorTotal = rows.reduce((s, p) => s + (parseFloat(p.totalvalue) || 0), 0)
 
     // Tempos
-    // Ajuiz→Cad: createdate deve ser APÓS distributiondate, e no máximo 5 anos de diferença
-    const ajuizCadRows = cadastrosNoPeriodo.filter(p => {
-      if (!p.distributiondate || !p.createdate) return false
-      const diff = daysDiff(p.distributiondate, p.createdate) // positivo = cad após ajuiz (correto)
-      return diff >= 0 && diff <= 1825 // só valores válidos, até 5 anos
-    })
-    const tempoAjuizCad = calcMedia(ajuizCadRows, p => daysDiff(p.distributiondate, p.createdate))
+    // Processos com ambas as datas preenchidas
+    const comAmbas = cadastrosNoPeriodo.filter(p => p.distributiondate && p.createdate)
+    const totalComAmbas = comAmbas.length
+
+    // Perfil 1: Nós ajuizamos (cad ANTES do ajuizamento) — só Ativas
+    const nosAjuizamos = comAmbas.filter(p => daysDiff(p.distributiondate, p.createdate) < 0)
+    const tempoCadAjuiz = nosAjuizamos.length > 0
+      ? calcMedia(nosAjuizamos, p => Math.abs(daysDiff(p.distributiondate, p.createdate)))
+      : null
+    const pctNosAjuizamos = totalComAmbas > 0
+      ? Math.round(nosAjuizamos.length / totalComAmbas * 100)
+      : 0
+
+    // Perfil 2: Recebidos em andamento (cad APÓS ajuizamento)
+    const recebidosEmAndamento = comAmbas.filter(p => daysDiff(p.distributiondate, p.createdate) > 0)
+    const tempoAjuizCad = recebidosEmAndamento.length > 0
+      ? calcMedia(recebidosEmAndamento, p => daysDiff(p.distributiondate, p.createdate))
+      : null
+    const pctRecebidosAndamento = totalComAmbas > 0
+      ? Math.round(recebidosEmAndamento.length / totalComAmbas * 100)
+      : 0
     const tempoCadEnc = calcMedia(encerradosNoPeriodo.filter(p => p.createdate && p.closedate), p => Math.abs(daysDiff(p.createdate, p.closedate)))
     const tempoAjuizEnc = calcMedia(encerradosNoPeriodo.filter(p => p.distributiondate && p.closedate), p => Math.abs(daysDiff(p.distributiondate, p.closedate)))
 
@@ -179,7 +193,10 @@ export async function buildAndSaveCache(onProgress) {
       cadastros: cadastrosNoPeriodo.length,
       encerrados: encerradosNoPeriodo.length,
       pctDentro, dentroPrazo: dentro.length, comPrazo: comPrazo.length,
-      valorTotal, valorMedio: rows.length > 0 ? valorTotal / rows.length : 0, tempoAjuizCad, tempoCadEnc, tempoAjuizEnc,
+      valorTotal, valorMedio: rows.length > 0 ? valorTotal / rows.length : 0,
+      tempoAjuizCad, tempoCadAjuiz, pctNosAjuizamos, pctRecebidosAndamento,
+      nosAjuizamosCount: nosAjuizamos.length, recebidosAndamentoCount: recebidosEmAndamento.length,
+      tempoCadEnc, tempoAjuizEnc,
       mesesData, evolucaoBase, equipesData, prazoEquipeData, motivosData, estadosData
     }
 
