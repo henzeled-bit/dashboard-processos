@@ -140,9 +140,23 @@ export default function ConfiguracoesPage() {
         }
 
         if (records.length > 0) {
-          await supabase
-            .from('processos')
-            .upsert(records, { onConflict: 'processid', ignoreDuplicates: false })
+          // Só envia campos preenchidos para não sobrescrever dados existentes com vazio
+          const safeRecords = records.map(rec => {
+            const r = { processid: rec.processid, updated_at: rec.updated_at }
+            if (rec.createdate) r.createdate = rec.createdate
+            if (rec.distributiondate) r.distributiondate = rec.distributiondate
+            if (rec.closedatepartial) r.closedatepartial = rec.closedatepartial
+            if (rec.closedate) r.closedate = rec.closedate
+            if (rec.closereason) r.closereason = rec.closereason
+            if (rec.namearea) r.namearea = rec.namearea
+            if (rec.namelawyer) r.namelawyer = rec.namelawyer
+            if (rec.namestate) r.namestate = rec.namestate
+            if (rec.nameactiontype) r.nameactiontype = rec.nameactiontype
+            if (rec.totalvalue !== null && rec.totalvalue !== undefined) r.totalvalue = rec.totalvalue
+            if (rec.team) r.team = rec.team
+            return r
+          })
+          await supabase.from('processos').upsert(safeRecords, { onConflict: 'processid' })
         }
 
         const current = Math.min(i + BATCH, total)
@@ -182,6 +196,89 @@ export default function ConfiguracoesPage() {
       setCacheMsg('Erro: ' + err.message)
     }
     setBuildingCache(false)
+  }
+
+  const [importandoHonorarios, setImportandoHonorarios] = useState(false)
+  const [progressHon, setProgressHon] = useState(null)
+  const [logHon, setLogHon] = useState(null)
+  const fileHonRef = useRef()
+
+  const handleHonorariosImport = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    setImportandoHonorarios(true)
+    setLogHon(null)
+    setProgressHon(null)
+    try {
+      const buffer = await file.arrayBuffer()
+      const wb = XLSX.read(buffer, { type: 'array', cellDates: false })
+      // Usa aba '1º Quadrimestre' ou a primeira disponível
+      const abaNome = wb.SheetNames.find(n => n.includes('Quadrimestre') || n.includes('quadrimestre')) || wb.SheetNames[0]
+      const ws = wb.Sheets[abaNome]
+      const raw = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' })
+
+      if (raw.length < 2) { setLogHon({ error: 'Arquivo vazio.' }); setImportandoHonorarios(false); return }
+
+      const headers = raw[0].map(h => h?.toString().trim().toUpperCase())
+      const col = (name) => headers.findIndex(h => h.includes(name))
+
+      const idxProcessid = col('ID DO PROCESSO')
+      const idxFase = col('FASE PROCESSUAL')
+      const idxValor = col('VALOR')
+      const idxDataAto = col('DATA DO ATO')
+      const idxDataEnvio = col('DATA DE ENVIO')
+      const idxDataAutorizacao = col('DATA APROVAÇÃO') !== -1 ? col('DATA APROVAÇÃO') : col('DATA APROV')
+
+      if (idxProcessid === -1 || idxValor === -1) {
+        setLogHon({ error: 'Colunas obrigatórias não encontradas (ID DO PROCESSO, VALOR).' })
+        setImportandoHonorarios(false)
+        return
+      }
+
+      const parseDate = (v) => {
+        if (!v) return null
+        if (typeof v === 'number') return new Date((v - 25569) * 86400 * 1000).toISOString().split('T')[0]
+        if (v instanceof Date) return v.toISOString().split('T')[0]
+        const s = v.toString().trim()
+        if (!s || s.toLowerCase() === 'null') return null
+        const parts = s.split('/')
+        if (parts.length === 3) { const [d,m,y] = parts; return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}` }
+        const d = new Date(s)
+        if (!isNaN(d)) return d.toISOString().split('T')[0]
+        return null
+      }
+
+      const rows = raw.slice(1).filter(r => r[idxProcessid] && r[idxValor])
+      const total = rows.length
+      const BATCH = 100
+
+      for (let i = 0; i < rows.length; i += BATCH) {
+        const batch = rows.slice(i, i + BATCH)
+        const records = batch.map(row => ({
+          processid: row[idxProcessid]?.toString().trim(),
+          fase: idxFase !== -1 ? (row[idxFase]?.toString().trim() || null) : null,
+          valor: parseFloat(row[idxValor]?.toString().replace(',', '.')) || null,
+          data_ato: idxDataAto !== -1 ? parseDate(row[idxDataAto]) : null,
+          data_envio_pedido: idxDataEnvio !== -1 ? parseDate(row[idxDataEnvio]) : null,
+          data_autorizacao: idxDataAutorizacao !== -1 ? parseDate(row[idxDataAutorizacao]) : null,
+        })).filter(r => r.processid && r.valor)
+
+        if (records.length > 0) {
+          await supabase.from('honorarios').insert(records)
+        }
+
+        const current = Math.min(i + BATCH, total)
+        setProgressHon({ current, total, pct: Math.round(current / total * 100) })
+        await new Promise(resolve => setTimeout(resolve, 0))
+      }
+
+      setLogHon({ success: true, filename: file.name, total })
+    } catch(err) {
+      setLogHon({ error: `Erro: ${err.message}` })
+    }
+    setImportandoHonorarios(false)
+    setProgressHon(null)
+    if (fileHonRef.current) fileHonRef.current.value = ''
   }
 
   const addRule = async () => {
@@ -278,6 +375,41 @@ export default function ConfiguracoesPage() {
             </table>
           </div>
         )}
+      </Section>
+
+      <Section title="💵 Importar Honorários" subtitle="Importe a planilha de atos aprovados. Cada linha será salva como um honorário vinculado ao ID do processo.">
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center', flexWrap: 'wrap' }}>
+          <input ref={fileHonRef} type="file" accept=".xlsx,.xls,.csv" onChange={handleHonorariosImport} disabled={importandoHonorarios} style={{ display: 'none' }} id="fileHonInput" />
+          <label htmlFor="fileHonInput" style={{ ...btnPrimary, opacity: importandoHonorarios ? 0.5 : 1, cursor: importandoHonorarios ? 'not-allowed' : 'pointer', display: 'inline-block', background: 'linear-gradient(135deg, #10b981, #047857)' }}>
+            {importandoHonorarios ? '⏳ Importando...' : '💵 Selecionar Planilha de Honorários'}
+          </label>
+        </div>
+
+        {progressHon && (
+          <div style={{ marginTop: '20px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
+              <span style={{ color: 'rgba(255,255,255,0.6)', fontSize: '13px' }}>
+                Processando {progressHon.current.toLocaleString('pt-BR')} de {progressHon.total.toLocaleString('pt-BR')} registros
+              </span>
+              <span style={{ color: '#6ee7b7', fontSize: '13px', fontWeight: '600' }}>{progressHon.pct}%</span>
+            </div>
+            <div style={{ background: 'rgba(255,255,255,0.08)', borderRadius: '8px', height: '10px', overflow: 'hidden' }}>
+              <div style={{ height: '100%', borderRadius: '8px', background: 'linear-gradient(90deg, #10b981, #06b6d4)', width: `${progressHon.pct}%`, transition: 'width 0.3s ease' }} />
+            </div>
+          </div>
+        )}
+
+        {logHon && (
+          <div style={{ marginTop: '16px', padding: '16px', background: logHon.error ? 'rgba(239,68,68,0.1)' : 'rgba(16,185,129,0.1)', border: `1px solid ${logHon.error ? 'rgba(239,68,68,0.3)' : 'rgba(16,185,129,0.3)'}`, borderRadius: '8px' }}>
+            {logHon.error
+              ? <p style={{ color: '#fca5a5', margin: 0 }}>❌ {logHon.error}</p>
+              : <p style={{ color: '#6ee7b7', margin: 0, fontWeight: '600' }}>✅ {logHon.total.toLocaleString('pt-BR')} honorários importados de {logHon.filename}</p>
+            }
+          </div>
+        )}
+        <p style={{ color: 'rgba(255,255,255,0.3)', fontSize: '12px', marginTop: '12px' }}>
+          ⚠️ Cada importação adiciona registros — não substitui. Para reimportar, limpe a tabela antes no Supabase.
+        </p>
       </Section>
 
       <Section title="⚡ Cache do Dashboard" subtitle="O cache é atualizado automaticamente após cada importação. Use o botão abaixo para recalcular manualmente se necessário.">
